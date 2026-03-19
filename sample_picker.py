@@ -48,7 +48,7 @@ import shutil
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 
 # ──────────────────────────────────────────────
@@ -113,20 +113,44 @@ SLOTS = {
 # Audio file extensions we care about
 AUDIO_EXTENSIONS = {'.wav', '.aif', '.aiff', '.flac', '.mp3', '.ogg'}
 
+# Keywords that indicate a loop rather than a one-shot
+LOOP_KEYWORDS = {'loop', 'loops', 'looped', 'looping', '_lp_', '-lp-', ' lp '}
+
 
 # ──────────────────────────────────────────────
 # Scanner
 # ──────────────────────────────────────────────
 
-def scan_samples(root_dir: str, verbose: bool = False) -> Dict[str, List[str]]:
-    """
-    Recursively scan a directory and classify audio files into slots.
+def _is_loop(filepath: Path) -> bool:
+    """Return True if the file appears to be a loop rather than a one-shot."""
+    check = (filepath.stem + ' ' + filepath.parent.name).lower()
+    return any(kw in check for kw in LOOP_KEYWORDS)
 
-    Returns a dict: { 'kick': [path, ...], 'snare': [...], ... }
-    """
+
+def _classify(filename_str: str, parent_str: str) -> Optional[str]:
+    """Classify a file into a slot based on keywords in its filename and parent folder."""
+    # Primary: filename first, parent folder as weaker signal
+    for slot, rules in SLOTS.items():
+        for keyword in rules['primary']:
+            if keyword in filename_str or keyword in parent_str:
+                if not any(excl in filename_str for excl in rules['exclude']):
+                    return slot
+
+    # Secondary: filename only
+    for slot, rules in SLOTS.items():
+        for keyword in rules['secondary']:
+            if keyword in filename_str:
+                if not any(excl in filename_str for excl in rules['exclude']):
+                    return slot
+
+    return None
+
+
+def scan_samples(root_dir: str, verbose: bool = False) -> Dict[str, List[str]]:
+    """Recursively scan a directory and classify one-shot audio files into slots."""
     classified: Dict[str, List[str]] = defaultdict(list)
-    total_files = 0
     audio_files = 0
+    loops_skipped = 0
 
     root_path = Path(root_dir)
     if not root_path.exists():
@@ -134,61 +158,24 @@ def scan_samples(root_dir: str, verbose: bool = False) -> Dict[str, List[str]]:
         sys.exit(1)
 
     for filepath in root_path.rglob('*'):
-        if not filepath.is_file():
-            continue
-        total_files += 1
-
-        if filepath.suffix.lower() not in AUDIO_EXTENSIONS:
+        if not filepath.is_file() or filepath.suffix.lower() not in AUDIO_EXTENSIONS:
             continue
         audio_files += 1
 
-        # Build a searchable string from the full path (catches folder names too)
-        # e.g. "Splice/sounds/Trap Essentials/kicks/kick_808_hard.wav"
-        search_str = str(filepath).lower()
-        filename_str = filepath.stem.lower()
+        if _is_loop(filepath):
+            loops_skipped += 1
+            continue
 
-        # Classify
-        slot = _classify(search_str, filename_str)
+        slot = _classify(filepath.stem.lower(), filepath.parent.name.lower())
         if slot:
             classified[slot].append(str(filepath))
 
     if verbose:
-        print(f"  Scanned {total_files} files, {audio_files} audio files")
+        print(f"  Scanned {audio_files} audio files ({loops_skipped} loops skipped)")
         for slot in ['kick', 'snare', 'hat', 'perc']:
-            count = len(classified.get(slot, []))
-            print(f"  {slot:>6}: {count} samples found")
+            print(f"  {slot:>6}: {len(classified.get(slot, []))} one-shots found")
 
     return dict(classified)
-
-
-def _classify(search_str: str, filename_str: str) -> Optional[str]:
-    """Classify a file into a slot based on keywords in its path/name."""
-    # Try primary keywords first (strongest signal)
-    for slot, rules in SLOTS.items():
-        for keyword in rules['primary']:
-            if keyword in filename_str or keyword in search_str.split(os.sep)[-3:]:
-                # Check exclusions
-                excluded = False
-                for excl in rules['exclude']:
-                    if excl in filename_str:
-                        excluded = True
-                        break
-                if not excluded:
-                    return slot
-
-    # Try secondary keywords (weaker signal, filename only)
-    for slot, rules in SLOTS.items():
-        for keyword in rules['secondary']:
-            if keyword in filename_str:
-                excluded = False
-                for excl in rules['exclude']:
-                    if excl in filename_str:
-                        excluded = True
-                        break
-                if not excluded:
-                    return slot
-
-    return None
 
 
 # ──────────────────────────────────────────────
