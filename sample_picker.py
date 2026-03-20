@@ -238,6 +238,9 @@ def pick_samples(
     if seed is not None:
         random.seed(seed)
 
+    # Shuffle all pools first so filtering operates on a randomized order
+    samples = {slot: random.sample(paths, len(paths)) for slot, paths in samples.items()}
+
     picked = {}
     for slot in ['kick', 'snare', 'hat', 'perc']:
         pool = samples.get(slot, [])
